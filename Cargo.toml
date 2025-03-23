@@ -4,4 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-hound = "3.5.0"
+eframe = "0.22"
+hound = "3.5"
+rfd = "0.11"

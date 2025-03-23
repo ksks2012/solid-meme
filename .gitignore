@@ -1,2 +1,5 @@
 /target
 /var
+
+*.wav
+*.mp3
