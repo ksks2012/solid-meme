@@ -27,6 +27,12 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Play Processed").clicked() {
                     app.play_processed();
                 }
+                if ui.button("Pause").clicked() {
+                    app.pause_playback();
+                }
+                if ui.button("Resume").clicked() {
+                    app.resume_playback();
+                }
                 if ui.button("Stop").clicked() {
                     app.stop_playback();
                 }
@@ -82,8 +88,10 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 );
 
                 ui.input(|i| {
-                    for response in &[raw_response, proc_response] {
+                    let responses = [raw_response, proc_response];
+                    for (index, response) in responses.iter().enumerate() {
                         let rect = response.rect;
+                        let is_original = index == 0;
                         if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                             let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
                             app.zoom *= zoom_factor;
@@ -91,14 +99,30 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                         }
                         if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                             let delta = i.pointer.delta();
-                                let total_samples = app.raw_waveform.samples.len() as f32;
+                                let total_samples = if is_original {
+                                    app.raw_waveform.samples.len()
+                                } else {
+                                    app.processed_waveform.samples.len()
+                                } as f32;
                                 let samples_per_pixel = total_samples / width / app.zoom;
                                 app.offset -= delta.x;
                                 app.offset = app.offset.max(0.0).min(total_samples / samples_per_pixel - width);
                         }
+                        if i.pointer.primary_clicked() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                            if let Some(pos) = i.pointer.hover_pos() {
+                                let total_samples = if is_original {
+                                    app.raw_waveform.samples.len()
+                                } else {
+                                    app.processed_waveform.samples.len()
+                                } as f32;
+                                let samples_per_pixel = total_samples / width / app.zoom;
+                                let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
+                                app.jump_to_position(sample_idx);
+                            }
+                        }
                     }
                 });
-
+                
                 ctx.request_repaint();
             } else {
                 ui.label("Please load a WAV file first");

@@ -1,3 +1,4 @@
+use cpal::traits::StreamTrait;
 use crate::audio::{play_samples, WaveformData};
 use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
@@ -132,5 +133,30 @@ impl SoundApp {
         self.playing_stream = None;
         *self.raw_waveform.current_idx.lock().unwrap() = 0;
         *self.processed_waveform.current_idx.lock().unwrap() = 0;
+    }
+
+    pub fn pause_playback(&mut self) {
+        if let Some(stream) = &self.playing_stream {
+            stream.pause().expect("Failed to pause stream");
+        }
+    }
+
+    pub fn resume_playback(&mut self) {
+        if let Some(stream) = &self.playing_stream {
+            stream.play().expect("Failed to resume stream");
+        }
+    }
+
+    pub fn jump_to_position(&mut self, sample_idx: usize) {
+        let current_idx = if self.playing_original {
+            &self.raw_waveform.current_idx
+        } else {
+            &self.processed_waveform.current_idx
+        };
+        *current_idx.lock().unwrap() = sample_idx.min(if self.playing_original {
+            self.raw_waveform.samples_raw.len()
+        } else {
+            self.processed_waveform.samples_raw.len()
+        });
     }
 }
