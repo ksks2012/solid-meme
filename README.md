@@ -35,3 +35,13 @@ To install the necessary packages for this project, run the following command:
 sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libglib2.0-dev libatk1.0-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libasound2-dev
 ```
+## Project Structure
+
+```
+src/
+├── main.rs         # Entry point of the application
+├── app.rs          # SoundApp structure and core logic
+├── audio.rs        # Audio processing and playback functionalities
+├── ui.rs           # UI rendering and interaction logic
+└── lib.rs          # Optional, defines public modules (if needed as a library)
+```
