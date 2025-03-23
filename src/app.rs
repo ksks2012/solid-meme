@@ -8,6 +8,7 @@ pub struct SoundApp {
     pub processed_waveform: WaveformData,
     pub spec: Option<hound::WavSpec>,
     pub file_loaded: bool,
+    pub processed_ready: bool,
     pub zoom: f32,
     pub offset: f32,
 }
@@ -19,6 +20,7 @@ impl SoundApp {
             processed_waveform: WaveformData::new(),
             spec: None,
             file_loaded: false,
+            processed_ready: false,
             zoom: 1.0,
             offset: 0.0,
         }
@@ -37,6 +39,7 @@ impl SoundApp {
                 self.file_loaded = true;
                 self.zoom = 1.0;
                 self.offset = 0.0;
+                self.processed_ready = false;
             }
         }
     }
@@ -80,6 +83,7 @@ impl SoundApp {
 
         self.processed_waveform.samples_raw = result_samples;
         self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+        self.processed_ready = true;
     }
 
     pub fn save_file(&self) {
@@ -102,7 +106,6 @@ impl SoundApp {
 
     pub fn play_original(&mut self) {
         if self.file_loaded && self.spec.is_some() {
-            // 暫停處理後波形
             if let Some(stream) = &self.processed_waveform.playing_stream {
                 stream.pause().expect("Failed to pause processed stream");
             }
@@ -114,8 +117,7 @@ impl SoundApp {
     }
 
     pub fn play_processed(&mut self) {
-        if self.file_loaded && self.spec.is_some() {
-            // 暫停原始波形
+        if self.file_loaded && self.spec.is_some() && self.processed_ready {
             if let Some(stream) = &self.raw_waveform.playing_stream {
                 stream.pause().expect("Failed to pause original stream");
             }
@@ -139,12 +141,18 @@ impl SoundApp {
     }
 
     pub fn resume_original(&mut self) {
+        if let Some(stream) = &self.processed_waveform.playing_stream {
+            stream.pause().expect("Failed to pause original stream");
+        }
         if let Some(stream) = &self.raw_waveform.playing_stream {
             stream.play().expect("Failed to resume original stream");
         }
     }
 
     pub fn resume_processed(&mut self) {
+        if let Some(stream) = &self.raw_waveform.playing_stream {
+            stream.pause().expect("Failed to pause original stream");
+        }
         if let Some(stream) = &self.processed_waveform.playing_stream {
             stream.play().expect("Failed to resume processed stream");
         }

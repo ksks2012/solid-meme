@@ -13,48 +13,33 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Remove Silence").clicked() {
                     app.remove_silence(0.01, 1000);
                 }
-                if ui.button("Export").clicked() {
+                if app.processed_ready && ui.button("Export").clicked() {
                     app.save_file();
                 }
             });
 
             ui.add_space(10.0);
 
-            ui.horizontal(|ui| {
-                ui.label("Original:");
-                if ui.button("Play").clicked() {
-                    app.play_original();
-                }
-                if ui.button("Pause").clicked() {
-                    app.pause_original();
-                }
-                if ui.button("Resume").clicked() {
-                    app.resume_original();
-                }
-                if ui.button("Stop").clicked() {
-                    app.stop_original();
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Processed:");
-                if ui.button("Play").clicked() {
-                    app.play_processed();
-                }
-                if ui.button("Pause").clicked() {
-                    app.pause_processed();
-                }
-                if ui.button("Resume").clicked() {
-                    app.resume_processed();
-                }
-                if ui.button("Stop").clicked() {
-                    app.stop_processed();
-                }
-            });
-
-            ui.add_space(30.0);
-
             if app.file_loaded {
+                ui.horizontal(|ui| {
+                    ui.label("Original:");
+                    if ui.button("Play").clicked() {
+                        app.play_original();
+                    }
+                    if ui.button("Pause").clicked() {
+                        app.pause_original();
+                    }
+                    if ui.button("Resume").clicked() {
+                        app.resume_original();
+                    }
+                    if ui.button("Stop").clicked() {
+                        app.stop_original();
+                    }
+                });
+
+                ui.add_space(30.0);
+
+
                 let spec = app.spec.unwrap();
                 let sample_rate = spec.sample_rate as f32;
                 let current_raw_idx = *app.raw_waveform.current_idx.lock().unwrap() as f32;
@@ -68,53 +53,76 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     Sense::click_and_drag(),
                 );
 
-                ui.add_space(30.0);
+                if app.processed_ready {
+                    ui.add_space(50.0);
 
-                ui.label("Processed Waveform:");
-                let proc_response = ui.allocate_rect(
-                    Rect::from_min_size(ui.cursor().min, egui::Vec2::new(ui.available_width(), 200.0)),
-                    Sense::click_and_drag(),
-                );
-
-                let painter = ui.painter();
-                let width = ui.available_width();
-                draw_waveform(
-                    &painter,
-                    raw_response.rect,
-                    &app.raw_waveform.samples,
-                    current_raw_idx,
-                    current_raw_time,
-                    app.raw_waveform.playing_stream.is_some(),
-                    sample_rate,
-                    app.zoom,
-                    app.offset,
-                );
-                draw_waveform(
-                    &painter,
-                    proc_response.rect,
-                    &app.processed_waveform.samples,
-                    current_proc_idx,
-                    current_proc_time,
-                    app.processed_waveform.playing_stream.is_some(),
-                    sample_rate,
-                    app.zoom,
-                    app.offset,
-                );
-
-                ui.input(|i| {
-                    let responses = [raw_response, proc_response];
-                    for (index, response) in responses.iter().enumerate() {
-                        let rect = response.rect;
-                        let is_original = index == 0;
-
-                        if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
-                            let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
-                            app.zoom *= zoom_factor;
-                            app.zoom = app.zoom.max(0.1).min(100.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Processed:");
+                        if ui.button("Play").clicked() {
+                            app.play_processed();
                         }
+                        if ui.button("Pause").clicked() {
+                            app.pause_processed();
+                        }
+                        if ui.button("Resume").clicked() {
+                            app.resume_processed();
+                        }
+                        if ui.button("Stop").clicked() {
+                            app.stop_processed();
+                        }
+                    });
 
-                        if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
-                            let delta = i.pointer.delta();
+                    ui.add_space(30.0);
+
+                    ui.label("Processed Waveform:");
+                    let proc_response = ui.allocate_rect(
+                        Rect::from_min_size(ui.cursor().min, egui::Vec2::new(ui.available_width(), 200.0)),
+                        Sense::click_and_drag(),
+                    );
+
+                    let painter = ui.painter();
+                    let width = ui.available_width();
+                    draw_waveform(
+                        &painter,
+                        raw_response.rect,
+                        &app.raw_waveform.samples,
+                        current_raw_idx,
+                        current_raw_time,
+                        app.raw_waveform.playing_stream.is_some(),
+                        sample_rate,
+                        app.zoom,
+                        app.offset,
+                    );
+                    draw_waveform(
+                        &painter,
+                        proc_response.rect,
+                        &app.processed_waveform.samples,
+                        current_proc_idx,
+                        current_proc_time,
+                        app.processed_waveform.playing_stream.is_some(),
+                        sample_rate,
+                        app.zoom,
+                        app.offset,
+                    );
+
+                    ui.input(|i| {
+                        let responses = if app.processed_ready {
+                            vec![raw_response, proc_response]
+                        } else {
+                            vec![raw_response]
+                        };
+                        for (index, response) in responses.iter().enumerate() {
+                            let rect = response.rect;
+                            let is_original = index == 0;
+
+                            if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                                let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
+                                app.zoom *= zoom_factor;
+                                app.zoom = app.zoom.max(0.1).min(100.0);
+                            }
+
+                            if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                                let delta = i.pointer.delta();
                                 let total_samples = if is_original {
                                     app.raw_waveform.samples.len()
                                 } else {
@@ -123,22 +131,63 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                                 let samples_per_pixel = total_samples / width / app.zoom;
                                 app.offset -= delta.x;
                                 app.offset = app.offset.max(0.0).min(total_samples / samples_per_pixel - width);
-                        }
-                        
-                        if i.pointer.primary_clicked() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
-                            if let Some(pos) = i.pointer.hover_pos() {
-                                let total_samples = if is_original {
-                                    app.raw_waveform.samples.len()
-                                } else {
-                                    app.processed_waveform.samples.len()
-                                } as f32;
-                                let samples_per_pixel = total_samples / width / app.zoom;
-                                let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
-                                app.jump_to_position(sample_idx, is_original);
+                            }
+
+                            if i.pointer.primary_clicked() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                                if let Some(pos) = i.pointer.hover_pos() {
+                                    let total_samples = if is_original {
+                                        app.raw_waveform.samples.len()
+                                    } else {
+                                        app.processed_waveform.samples.len()
+                                    } as f32;
+                                    let samples_per_pixel = total_samples / width / app.zoom;
+                                    let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
+                                    app.jump_to_position(sample_idx, is_original);
+                                }
                             }
                         }
-                    }
-                });
+                    });
+                } else {                    
+                    let painter = ui.painter();
+                    let width = ui.available_width();
+                    draw_waveform(
+                        &painter,
+                        raw_response.rect,
+                        &app.raw_waveform.samples,
+                        current_raw_idx,
+                        current_raw_time,
+                        app.raw_waveform.playing_stream.is_some(),
+                        sample_rate,
+                        app.zoom,
+                        app.offset,
+                    );
+
+                    ui.input(|i| {
+                        let rect = raw_response.rect;
+                        if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                            let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
+                            app.zoom *= zoom_factor;
+                            app.zoom = app.zoom.max(0.1).min(100.0);
+                        }
+
+                        if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                            let delta = i.pointer.delta();
+                            let total_samples = app.raw_waveform.samples.len() as f32;
+                            let samples_per_pixel = total_samples / width / app.zoom;
+                            app.offset -= delta.x;
+                            app.offset = app.offset.max(0.0).min(total_samples / samples_per_pixel - width);
+                        }
+
+                        if i.pointer.primary_clicked() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                            if let Some(pos) = i.pointer.hover_pos() {
+                                let total_samples = app.raw_waveform.samples.len() as f32;
+                                let samples_per_pixel = total_samples / width / app.zoom;
+                                let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
+                                app.jump_to_position(sample_idx, true);
+                            }
+                        }
+                    });
+                }
 
                 ctx.request_repaint();
             } else {
@@ -207,7 +256,7 @@ fn draw_waveform(
                 Align2::CENTER_TOP,
                 format!("{}s", sec),
                 FontId::default(),
-                Color32::BLACK,
+                Color32::WHITE,
             );
         }
     }
