@@ -8,6 +8,7 @@ pub struct WaveformData {
     pub samples: Vec<f32>,        // Waveform data for display
     pub samples_raw: Vec<i16>,    // Raw data for playback
     pub current_idx: Arc<Mutex<usize>>, // Playback progress
+    pub playing_stream: Option<Arc<cpal::Stream>>,
 }
 
 impl WaveformData {
@@ -16,6 +17,7 @@ impl WaveformData {
             samples: Vec::new(),
             samples_raw: Vec::new(),
             current_idx: Arc::new(Mutex::new(0)),
+            playing_stream: None,
         }
     }
 
@@ -24,6 +26,7 @@ impl WaveformData {
             samples,
             samples_raw,
             current_idx: Arc::new(Mutex::new(0)),
+            playing_stream: None,
         }
     }
 }
@@ -42,10 +45,6 @@ pub fn play_samples(
         sample_rate: cpal::SampleRate(spec.sample_rate),
         buffer_size: cpal::BufferSize::Default,
     };
-
-    println!("Playing samples count: {}, Sample rate: {}, Channels: {}", sample_len, spec.sample_rate, spec.channels);
-    println!("Device: {:?}", device.name());
-    println!("Config: {:?}", config);
 
     let samples = samples.clone();
     let current_idx = Arc::clone(current_idx);

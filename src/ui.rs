@@ -21,20 +21,34 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
             ui.add_space(10.0);
 
             ui.horizontal(|ui| {
-                if ui.button("Play Original").clicked() {
+                ui.label("Original:");
+                if ui.button("Play").clicked() {
                     app.play_original();
                 }
-                if ui.button("Play Processed").clicked() {
+                if ui.button("Pause").clicked() {
+                    app.pause_original();
+                }
+                if ui.button("Resume").clicked() {
+                    app.resume_original();
+                }
+                if ui.button("Stop").clicked() {
+                    app.stop_original();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Processed:");
+                if ui.button("Play").clicked() {
                     app.play_processed();
                 }
                 if ui.button("Pause").clicked() {
-                    app.pause_playback();
+                    app.pause_processed();
                 }
                 if ui.button("Resume").clicked() {
-                    app.resume_playback();
+                    app.resume_processed();
                 }
                 if ui.button("Stop").clicked() {
-                    app.stop_playback();
+                    app.stop_processed();
                 }
             });
 
@@ -54,7 +68,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     Sense::click_and_drag(),
                 );
 
-                ui.add_space(50.0);
+                ui.add_space(30.0);
 
                 ui.label("Processed Waveform:");
                 let proc_response = ui.allocate_rect(
@@ -70,8 +84,8 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     &app.raw_waveform.samples,
                     current_raw_idx,
                     current_raw_time,
-                    app.playing_stream.is_some() && app.playing_original,
-                    spec.sample_rate as f32,
+                    app.raw_waveform.playing_stream.is_some(),
+                    sample_rate,
                     app.zoom,
                     app.offset,
                 );
@@ -81,8 +95,8 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     &app.processed_waveform.samples,
                     current_proc_idx,
                     current_proc_time,
-                    app.playing_stream.is_some() && !app.playing_original,
-                    spec.sample_rate as f32,
+                    app.processed_waveform.playing_stream.is_some(),
+                    sample_rate,
                     app.zoom,
                     app.offset,
                 );
@@ -92,11 +106,13 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     for (index, response) in responses.iter().enumerate() {
                         let rect = response.rect;
                         let is_original = index == 0;
+
                         if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                             let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
                             app.zoom *= zoom_factor;
                             app.zoom = app.zoom.max(0.1).min(100.0);
                         }
+
                         if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                             let delta = i.pointer.delta();
                                 let total_samples = if is_original {
@@ -108,6 +124,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                                 app.offset -= delta.x;
                                 app.offset = app.offset.max(0.0).min(total_samples / samples_per_pixel - width);
                         }
+                        
                         if i.pointer.primary_clicked() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                             if let Some(pos) = i.pointer.hover_pos() {
                                 let total_samples = if is_original {
@@ -117,12 +134,12 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                                 } as f32;
                                 let samples_per_pixel = total_samples / width / app.zoom;
                                 let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
-                                app.jump_to_position(sample_idx);
+                                app.jump_to_position(sample_idx, is_original);
                             }
                         }
                     }
                 });
-                
+
                 ctx.request_repaint();
             } else {
                 ui.label("Please load a WAV file first");
@@ -139,15 +156,14 @@ fn draw_waveform(
     current_time: f32,
     show_progress: bool,
     sample_rate: f32,
-    // for zoom feature
-    zoom: f32,    
-    offset: f32,     
+    zoom: f32,
+    offset: f32,
 ) {
     let pos = rect.min;
     let height = rect.height();
     let width = rect.width();
 
-    painter.rect_filled(rect, 0.0, egui::Color32::GRAY);
+    painter.rect_filled(rect, 0.0, Color32::WHITE);
 
     let total_samples = samples.len() as f32;
     let total_seconds = total_samples / sample_rate;
@@ -163,7 +179,7 @@ fn draw_waveform(
             points.push(Pos2::new(pos.x + x as f32, y_pos));
         }
     }
-    painter.add(egui::Shape::line(points, Stroke::new(1.0, Color32::WHITE)));
+    painter.add(egui::Shape::line(points, Stroke::new(1.0, Color32::BLACK)));
 
     if show_progress && current_idx < total_samples {
         let progress_x = pos.x + (current_idx / total_samples * width * zoom) - offset;
@@ -191,7 +207,7 @@ fn draw_waveform(
                 Align2::CENTER_TOP,
                 format!("{}s", sec),
                 FontId::default(),
-                Color32::WHITE,
+                Color32::BLACK,
             );
         }
     }

@@ -2,17 +2,14 @@ use cpal::traits::StreamTrait;
 use crate::audio::{play_samples, WaveformData};
 use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
-use std::sync::Arc;
 
 pub struct SoundApp {
     pub raw_waveform: WaveformData,
     pub processed_waveform: WaveformData,
     pub spec: Option<hound::WavSpec>,
     pub file_loaded: bool,
-    pub playing_stream: Option<Arc<cpal::Stream>>,
     pub zoom: f32,
     pub offset: f32,
-    pub playing_original: bool,
 }
 
 impl SoundApp {
@@ -22,10 +19,8 @@ impl SoundApp {
             processed_waveform: WaveformData::new(),
             spec: None,
             file_loaded: false,
-            playing_stream: None,
             zoom: 1.0,
             offset: 0.0,
-            playing_original: false,
         }
     }
 
@@ -107,56 +102,66 @@ impl SoundApp {
 
     pub fn play_original(&mut self) {
         if self.file_loaded && self.spec.is_some() {
+            // 暫停處理後波形
+            if let Some(stream) = &self.processed_waveform.playing_stream {
+                stream.pause().expect("Failed to pause processed stream");
+            }
             let samples = self.raw_waveform.samples_raw.clone();
             let spec = self.spec.unwrap();
             println!("Playing original samples count: {}", samples.len());
-            self.playing_original = true;
-            play_samples(&mut self.playing_stream, samples, spec, &self.raw_waveform.current_idx);
-        } else {
-            println!("No file loaded, cannot play original audio");
+            play_samples(&mut self.raw_waveform.playing_stream, samples, spec, &self.raw_waveform.current_idx);
         }
     }
 
     pub fn play_processed(&mut self) {
         if self.file_loaded && self.spec.is_some() {
+            // 暫停原始波形
+            if let Some(stream) = &self.raw_waveform.playing_stream {
+                stream.pause().expect("Failed to pause original stream");
+            }
             let samples = self.processed_waveform.samples_raw.clone();
             let spec = self.spec.unwrap();
             println!("Playing processed samples count: {}", samples.len());
-            self.playing_original = false;
-            play_samples(&mut self.playing_stream, samples, spec, &self.processed_waveform.current_idx);
-        } else {
-            println!("No file loaded, cannot play processed audio");
+            play_samples(&mut self.processed_waveform.playing_stream, samples, spec, &self.processed_waveform.current_idx);
         }
     }
 
-    pub fn stop_playback(&mut self) {
-        self.playing_stream = None;
+    pub fn pause_original(&mut self) {
+        if let Some(stream) = &self.raw_waveform.playing_stream {
+            stream.pause().expect("Failed to pause original stream");
+        }
+    }
+
+    pub fn pause_processed(&mut self) {
+        if let Some(stream) = &self.processed_waveform.playing_stream {
+            stream.pause().expect("Failed to pause processed stream");
+        }
+    }
+
+    pub fn resume_original(&mut self) {
+        if let Some(stream) = &self.raw_waveform.playing_stream {
+            stream.play().expect("Failed to resume original stream");
+        }
+    }
+
+    pub fn resume_processed(&mut self) {
+        if let Some(stream) = &self.processed_waveform.playing_stream {
+            stream.play().expect("Failed to resume processed stream");
+        }
+    }
+
+    pub fn stop_original(&mut self) {
+        self.raw_waveform.playing_stream = None;
         *self.raw_waveform.current_idx.lock().unwrap() = 0;
+    }
+
+    pub fn stop_processed(&mut self) {
+        self.processed_waveform.playing_stream = None;
         *self.processed_waveform.current_idx.lock().unwrap() = 0;
     }
 
-    pub fn pause_playback(&mut self) {
-        if let Some(stream) = &self.playing_stream {
-            stream.pause().expect("Failed to pause stream");
-        }
-    }
-
-    pub fn resume_playback(&mut self) {
-        if let Some(stream) = &self.playing_stream {
-            stream.play().expect("Failed to resume stream");
-        }
-    }
-
-    pub fn jump_to_position(&mut self, sample_idx: usize) {
-        let current_idx = if self.playing_original {
-            &self.raw_waveform.current_idx
-        } else {
-            &self.processed_waveform.current_idx
-        };
-        *current_idx.lock().unwrap() = sample_idx.min(if self.playing_original {
-            self.raw_waveform.samples_raw.len()
-        } else {
-            self.processed_waveform.samples_raw.len()
-        });
+    pub fn jump_to_position(&mut self, sample_idx: usize, is_original: bool) {
+        let waveform = if is_original { &mut self.raw_waveform } else { &mut self.processed_waveform };
+        *waveform.current_idx.lock().unwrap() = sample_idx.min(waveform.samples_raw.len());
     }
 }
