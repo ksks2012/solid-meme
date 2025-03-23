@@ -7,7 +7,6 @@ struct SoundApp {
     processed_samples: Vec<i16>, // Processed raw samples
     spec: Option<hound::WavSpec>,
     file_loaded: bool,
-    output_path: String,
 }
 
 impl SoundApp {
@@ -17,7 +16,6 @@ impl SoundApp {
             processed_samples: Vec::new(),
             spec: None,
             file_loaded: false,
-            output_path: "output.wav".to_string(),
         }
     }
 
@@ -79,11 +77,19 @@ impl SoundApp {
 
     fn save_file(&self) {
         if let Some(spec) = self.spec {
-            if let Ok(mut writer) = WavWriter::create(&self.output_path, spec) {
-                for &sample in &self.processed_samples {
-                    writer.write_sample(sample).unwrap();
+            // Pop up "Save As" dialog
+            if let Some(path) = FileDialog::new()
+                .add_filter("WAV", &["wav"])
+                .set_file_name("output.wav") // Default file name
+                .save_file()
+            {
+                if let Ok(mut writer) = WavWriter::create(&path, spec) {
+                    for &sample in &self.processed_samples {
+                        writer.write_sample(sample).unwrap();
+                    }
+                    writer.finalize().unwrap();
+                    println!("Saved to {:?}", path); // Optional: display save path
                 }
-                writer.finalize().unwrap();
             }
         }
     }
