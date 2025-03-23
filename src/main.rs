@@ -11,7 +11,9 @@ struct SoundApp {
     processed_samples: Vec<i16>,
     spec: Option<hound::WavSpec>,
     file_loaded: bool,
-    playing_stream: Option<Arc<cpal::Stream>>, // Store the currently playing stream
+    playing_stream: Option<Arc<cpal::Stream>>,
+    zoom: f32,    // Zoom factor (1.0 is original size)
+    offset: f32,  // Offset (unit: pixels)
 }
 
 impl SoundApp {
@@ -23,6 +25,8 @@ impl SoundApp {
             spec: None,
             file_loaded: false,
             playing_stream: None,
+            zoom: 1.0,
+            offset: 0.0,
         }
     }
 
@@ -37,6 +41,8 @@ impl SoundApp {
                 self.processed_samples = raw_samples;
                 self.spec = Some(spec);
                 self.file_loaded = true;
+                self.zoom = 1.0; // Reset zoom
+                self.offset = 0.0; // Reset offset
             }
         }
     }
@@ -132,20 +138,18 @@ impl SoundApp {
                 }
             },
             |err| eprintln!("Audio error: {}", err),
-             None,
+            None,
         ).expect("Failed to build output stream");
 
         stream.play().expect("Failed to play stream");
 
-        // Store the stream in the structure and wait in the background thread
         let stream = Arc::new(stream);
         self.playing_stream = Some(stream.clone());
 
         thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(
-            (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64)
+                (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64)
             ));
-            // The stream will be automatically destroyed here
         });
     }
 
@@ -197,18 +201,30 @@ impl eframe::App for SoundApp {
 
             if self.file_loaded {
                 ui.label("Audio Waveform:");
+
                 let painter = ui.painter();
                 let rect = ui.available_rect_before_wrap();
                 let height = rect.height().min(200.0);
                 let width = rect.width();
                 let pos = rect.min;
 
+                // Draw background
                 painter.rect_filled(rect, 0.0, egui::Color32::GRAY);
 
-                let step = self.samples.len() as f32 / width;
+                // Calculate total duration (seconds)
+                let spec = self.spec.unwrap();
+                let total_samples = self.samples.len() as f32;
+                let sample_rate = spec.sample_rate as f32;
+                let total_seconds = total_samples / sample_rate;
+
+                // Calculate visible range based on zoom and offset
+                let samples_per_pixel = total_samples / width / self.zoom;
+                let start_sample = (self.offset * samples_per_pixel).max(0.0).min(total_samples - 1.0) as usize;
+
+                // Draw waveform
                 let mut points = Vec::new();
                 for x in 0..width as usize {
-                    let sample_idx = (x as f32 * step) as usize;
+                    let sample_idx = (start_sample as f32 + x as f32 * samples_per_pixel) as usize;
                     if sample_idx < self.samples.len() {
                         let y = self.samples[sample_idx];
                         let y_pos = pos.y + height * (0.5 - y * 0.5);
@@ -216,6 +232,38 @@ impl eframe::App for SoundApp {
                     }
                 }
                 painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, egui::Color32::WHITE)));
+
+                // Draw timeline
+                let time_step = (total_seconds / width * 100.0).max(1.0); // Mark every 100 pixels, but at least 1 second
+                for sec in (0..total_seconds as usize).step_by(time_step as usize) {
+                    let x = pos.x + (sec as f32 / total_seconds * width * self.zoom) - self.offset;
+                    if x >= pos.x && x <= pos.x + width {
+                        painter.text(
+                            egui::Pos2::new(x, pos.y + height + 10.0),
+                            egui::Align2::CENTER_TOP,
+                            format!("{}s", sec),
+                            egui::FontId::default(),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
+
+                // Handle mouse events
+                ui.input(|i| {
+                    // Zoom (mouse wheel)
+                    if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                        let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
+                        self.zoom *= zoom_factor;
+                        self.zoom = self.zoom.max(0.1).min(100.0); // Limit zoom range
+                    }
+
+                    // Drag (left button)
+                    if i.pointer.primary_down() && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
+                        let delta = i.pointer.delta();
+                            self.offset -= delta.x; // Move in the opposite direction to match intuition
+                            self.offset = self.offset.max(0.0).min(total_seconds * sample_rate / samples_per_pixel - width);
+                    }
+                });
             } else {
                 ui.label("Please load a WAV file first");
             }
