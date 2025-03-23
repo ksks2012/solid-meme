@@ -3,7 +3,7 @@ use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
 use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
 use std::thread;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 struct SoundApp {
     samples: Vec<f32>,
@@ -12,8 +12,9 @@ struct SoundApp {
     spec: Option<hound::WavSpec>,
     file_loaded: bool,
     playing_stream: Option<Arc<cpal::Stream>>,
-    zoom: f32,    // Zoom factor (1.0 is original size)
-    offset: f32,  // Offset (unit: pixels)
+    zoom: f32,
+    offset: f32,
+    current_sample_idx: Arc<Mutex<usize>>, // Current playback sample index
 }
 
 impl SoundApp {
@@ -27,6 +28,7 @@ impl SoundApp {
             playing_stream: None,
             zoom: 1.0,
             offset: 0.0,
+            current_sample_idx: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -41,8 +43,9 @@ impl SoundApp {
                 self.processed_samples = raw_samples;
                 self.spec = Some(spec);
                 self.file_loaded = true;
-                self.zoom = 1.0; // Reset zoom
-                self.offset = 0.0; // Reset offset
+                self.zoom = 1.0;
+                self.offset = 0.0;
+                *self.current_sample_idx.lock().unwrap() = 0;
             }
         }
     }
@@ -121,16 +124,18 @@ impl SoundApp {
         println!("Config: {:?}", config);
 
         let samples = samples.clone();
-        let mut sample_idx = 0;
+        let current_idx = Arc::clone(&self.current_sample_idx);
+        *current_idx.lock().unwrap() = 0;
 
         let stream = device.build_output_stream(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let mut idx = current_idx.lock().unwrap();
                 for frame in data.chunks_mut(spec.channels as usize) {
                     for sample in frame {
-                        if sample_idx < sample_len {
-                            *sample = samples[sample_idx] as f32 / i16::MAX as f32;
-                            sample_idx += 1;
+                        if *idx < sample_len {
+                            *sample = samples[*idx] as f32 / i16::MAX as f32;
+                            *idx += 1;
                         } else {
                             *sample = 0.0;
                         }
@@ -151,6 +156,11 @@ impl SoundApp {
                 (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64)
             ));
         });
+    }
+
+    fn stop_playback(&mut self) {
+        self.playing_stream = None; // Drop the stream to stop playback
+        *self.current_sample_idx.lock().unwrap() = 0; // Reset playback position
     }
 
     fn play_original(&mut self) {
@@ -181,23 +191,36 @@ impl eframe::App for SoundApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Podcast Editing Tool");
 
-            ui.horizontal(|ui| {
-                if ui.button("Load Audio").clicked() {
-                    self.load_file();
-                }
-                if ui.button("Remove Silence").clicked() {
-                    self.remove_silence(0.01, 1000);
-                }
-                if ui.button("Play Original").clicked() {
-                    self.play_original();
-                }
-                if ui.button("Play Processed").clicked() {
-                    self.play_processed();
-                }
-                if ui.button("Export").clicked() {
-                    self.save_file();
-                }
+            // Button area
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Load Audio").clicked() {
+                        self.load_file();
+                    }
+                    if ui.button("Remove Silence").clicked() {
+                        self.remove_silence(0.01, 1000);
+                    }
+                    if ui.button("Export").clicked() {
+                        self.save_file();
+                    }
+                });
+
+                ui.add_space(10.0); // Add spacing
+
+                ui.horizontal(|ui| {
+                    if ui.button("Play Original").clicked() {
+                        self.play_original();
+                    }
+                    if ui.button("Play Processed").clicked() {
+                        self.play_processed();
+                    }
+                    if ui.button("Stop").clicked() {
+                        self.stop_playback();
+                    }
+                });
             });
+
+            ui.add_space(10.0);
 
             if self.file_loaded {
                 ui.label("Audio Waveform:");
@@ -211,11 +234,13 @@ impl eframe::App for SoundApp {
                 // Draw background
                 painter.rect_filled(rect, 0.0, egui::Color32::GRAY);
 
-                // Calculate total duration (seconds)
+                // Calculate total duration and current position
                 let spec = self.spec.unwrap();
                 let total_samples = self.samples.len() as f32;
                 let sample_rate = spec.sample_rate as f32;
                 let total_seconds = total_samples / sample_rate;
+                let current_idx = *self.current_sample_idx.lock().unwrap() as f32;
+                let current_time = current_idx / sample_rate;
 
                 // Calculate visible range based on zoom and offset
                 let samples_per_pixel = total_samples / width / self.zoom;
@@ -233,8 +258,26 @@ impl eframe::App for SoundApp {
                 }
                 painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, egui::Color32::WHITE)));
 
+                // Draw playback progress line
+                if self.playing_stream.is_some() && current_idx < total_samples {
+                    let progress_x = pos.x + (current_idx / total_samples * width * self.zoom) - self.offset;
+                    if progress_x >= pos.x && progress_x <= pos.x + width {
+                        painter.line_segment(
+                            [egui::Pos2::new(progress_x, pos.y), egui::Pos2::new(progress_x, pos.y + height)],
+                            egui::Stroke::new(1.0, egui::Color32::RED),
+                        );
+                        painter.text(
+                            egui::Pos2::new(progress_x, pos.y - 5.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("{:.1}s", current_time),
+                            egui::FontId::default(),
+                            egui::Color32::RED,
+                        );
+                    }
+                }
+
                 // Draw timeline
-                let time_step = (total_seconds / width * 100.0).max(1.0); // Mark every 100 pixels, but at least 1 second
+                let time_step = (total_seconds / width * 100.0).max(1.0);
                 for sec in (0..total_seconds as usize).step_by(time_step as usize) {
                     let x = pos.x + (sec as f32 / total_seconds * width * self.zoom) - self.offset;
                     if x >= pos.x && x <= pos.x + width {
@@ -250,11 +293,10 @@ impl eframe::App for SoundApp {
 
                 // Handle mouse events
                 ui.input(|i| {
-                    // Zoom (mouse wheel)
                     if i.scroll_delta.y != 0.0 && rect.contains(i.pointer.hover_pos().unwrap_or_default()) {
                         let zoom_factor = if i.scroll_delta.y > 0.0 { 1.1 } else { 0.9 };
                         self.zoom *= zoom_factor;
-                        self.zoom = self.zoom.max(0.1).min(100.0); // Limit zoom range
+                        self.zoom = self.zoom.max(0.1).min(100.0);
                     }
 
                     // Drag (left button)
@@ -264,6 +306,9 @@ impl eframe::App for SoundApp {
                             self.offset = self.offset.max(0.0).min(total_seconds * sample_rate / samples_per_pixel - width);
                     }
                 });
+
+                // Request repaint to update progress
+                ctx.request_repaint();
             } else {
                 ui.label("Please load a WAV file first");
             }
