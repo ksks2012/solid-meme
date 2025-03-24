@@ -8,9 +8,11 @@ pub struct SoundApp {
     pub processed_waveform: WaveformData,
     pub spec: Option<hound::WavSpec>,
     pub file_loaded: bool,
-    pub processed_ready: bool,
     pub zoom: f32,
     pub offset: f32,
+    pub processed_ready: bool,
+    pub silence_threshold: f32, // New: Silence threshold
+    pub min_silence_len: usize, // New: Minimum silence length
 }
 
 impl SoundApp {
@@ -20,9 +22,11 @@ impl SoundApp {
             processed_waveform: WaveformData::new(),
             spec: None,
             file_loaded: false,
-            processed_ready: false,
             zoom: 1.0,
             offset: 0.0,
+            processed_ready: false,
+            silence_threshold: 0.01, // Default threshold
+            min_silence_len: 1000,   // Default minimum length (milliseconds)
         }
     }
 
@@ -44,39 +48,77 @@ impl SoundApp {
         }
     }
 
-    pub fn remove_silence(&mut self, silence_threshold: f32, min_silence_len: usize) {
+    pub fn detect_silence(&mut self) -> Vec<(usize, usize)> {
         if !self.file_loaded || self.spec.is_none() {
-            return;
+            return Vec::new();
         }
         let spec = self.spec.unwrap();
         let channels = spec.channels as usize;
         let sample_rate = spec.sample_rate as usize;
-        let total_samples = self.processed_waveform.samples_raw.len();
+        let total_samples = self.raw_waveform.samples_raw.len();
 
-        let mut result_samples = Vec::new();
+        let mut silence_segments = Vec::new();
         let mut silence_count = 0;
+        let mut silence_start = 0;
 
         for i in (0..total_samples).step_by(channels) {
             let mut frame_amplitude = 0.0;
             for ch in 0..channels {
-                let sample = self.processed_waveform.samples_raw[i + ch] as f32;
+                let sample = self.raw_waveform.samples_raw[i + ch] as f32;
                 frame_amplitude += sample.abs() / i16::MAX as f32;
             }
             frame_amplitude /= channels as f32;
 
-            if frame_amplitude < silence_threshold {
+            if frame_amplitude < self.silence_threshold {
+                if silence_count == 0 {
+                    silence_start = i;
+                }
                 silence_count += 1;
-            } else {
-                if silence_count < min_silence_len / (sample_rate / 1000) {
-                    for _ in 0..silence_count {
-                        for _ in 0..channels {
-                            result_samples.push(0);
-                        }
-                    }
+            } else if silence_count > 0 {
+                let min_samples = self.min_silence_len * sample_rate / 1000;
+                if silence_count >= min_samples {
+                    silence_segments.push((silence_start, i));
                 }
                 silence_count = 0;
+            }
+        }
+
+        if silence_count >= self.min_silence_len * sample_rate / 1000 {
+            silence_segments.push((silence_start, total_samples));
+        }
+
+        silence_segments
+    }
+
+    pub fn remove_silence(&mut self) {
+        if !self.file_loaded || self.spec.is_none() {
+            return;
+        }
+        let silence_segments = self.detect_silence();
+        self.raw_waveform.silence_segments = silence_segments.clone(); // 儲存到原始波形
+
+        let spec = self.spec.unwrap();
+        let channels = spec.channels as usize;
+        let total_samples = self.raw_waveform.samples_raw.len();
+        let mut result_samples = Vec::new();
+        let mut last_end = 0;
+
+        for &(start, end) in &silence_segments {
+            // Retain non-silent parts
+            for i in (last_end..start).step_by(channels) {
                 for ch in 0..channels {
-                    result_samples.push(self.processed_waveform.samples_raw[i + ch]);
+                    if i + ch < total_samples {
+                        result_samples.push(self.raw_waveform.samples_raw[i + ch]);
+                    }
+                }
+            }
+            last_end = end;
+        }
+
+        for i in (last_end..total_samples).step_by(channels) {
+            for ch in 0..channels {
+                if i + ch < total_samples {
+                    result_samples.push(self.raw_waveform.samples_raw[i + ch]);
                 }
             }
         }
@@ -84,6 +126,10 @@ impl SoundApp {
         self.processed_waveform.samples_raw = result_samples;
         self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
         self.processed_ready = true;
+    }
+
+    pub fn remove_all_silence(&mut self) {
+        self.remove_silence(); // Directly call the existing logic
     }
 
     pub fn save_file(&self) {
