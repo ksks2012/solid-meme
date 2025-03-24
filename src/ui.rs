@@ -34,6 +34,21 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
             ui.add_space(10.0);
 
             if app.file_loaded {
+                let spec = app.spec.unwrap();
+                let sample_rate = spec.sample_rate as f32;
+                let current_raw_idx = *app.raw_waveform.current_idx.lock().unwrap() as f32;
+                let current_proc_idx = *app.processed_waveform.current_idx.lock().unwrap() as f32;
+                let current_raw_time = current_raw_idx / sample_rate;
+                let current_proc_time = current_proc_idx / sample_rate;
+    
+                ui.label(format!(
+                    "Detected {} silence segments, total {:.1}s",
+                    app.raw_waveform.silence_segments.len(),
+                    app.raw_waveform.silence_segments.iter().map(|&(s, e)| (e - s) as f32 / sample_rate).sum::<f32>()
+                ));
+    
+                ui.add_space(30.0);
+    
                 ui.horizontal(|ui| {
                     ui.label("Original:");
                     if ui.button("Play").clicked() {
@@ -52,13 +67,6 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
 
                 ui.add_space(30.0);
 
-                let spec = app.spec.unwrap();
-                let sample_rate = spec.sample_rate as f32;
-                let current_raw_idx = *app.raw_waveform.current_idx.lock().unwrap() as f32;
-                let current_proc_idx = *app.processed_waveform.current_idx.lock().unwrap() as f32;
-                let current_raw_time = current_raw_idx / sample_rate;
-                let current_proc_time = current_proc_idx / sample_rate;
-
                 ui.label("Original Waveform:");
                 let raw_response = ui.allocate_rect(
                     Rect::from_min_size(ui.cursor().min, egui::Vec2::new(ui.available_width(), 200.0)),
@@ -67,7 +75,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
 
                 let mut responses = vec![(raw_response.clone(), true)];
 
-                if app.processed_ready {
+                if app.processed_ready {                    
                     ui.add_space(100.0);
 
                     ui.horizontal(|ui| {
