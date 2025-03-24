@@ -2,15 +2,23 @@ use cpal::traits::StreamTrait;
 use crate::audio::{play_samples, WaveformData};
 use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 pub struct SoundApp {
     pub raw_waveform: WaveformData,
     pub processed_waveform: WaveformData,
     pub spec: Option<hound::WavSpec>,
     pub file_loaded: bool,
-    pub processed_ready: bool,
     pub zoom: f32,
     pub offset: f32,
+    pub processed_ready: bool,
+    pub silence_threshold: f32,
+    pub min_silence_len: usize,
+    pub is_processing: bool,
+    pub processing_progress: f32,
+    pub progress_rx: Option<Receiver<f32>>, // Persistent receiver for progress
+    pub result_rx: Option<Receiver<(Vec<(usize, usize)>, Option<Vec<i16>>)>>, // Persistent receiver for results
 }
 
 impl SoundApp {
@@ -20,9 +28,15 @@ impl SoundApp {
             processed_waveform: WaveformData::new(),
             spec: None,
             file_loaded: false,
-            processed_ready: false,
             zoom: 1.0,
             offset: 0.0,
+            processed_ready: false,
+            silence_threshold: 0.01,
+            min_silence_len: 1000,
+            is_processing: false,
+            processing_progress: 0.0,
+            progress_rx: None,
+            result_rx: None,
         }
     }
 
@@ -40,50 +54,173 @@ impl SoundApp {
                 self.zoom = 1.0;
                 self.offset = 0.0;
                 self.processed_ready = false;
+                self.is_processing = false;
+                self.processing_progress = 0.0;
             }
         }
     }
 
-    pub fn remove_silence(&mut self, silence_threshold: f32, min_silence_len: usize) {
-        if !self.file_loaded || self.spec.is_none() {
+    pub fn detect_silence_background(&mut self) {
+        if self.is_processing || !self.file_loaded || self.spec.is_none() {
             return;
         }
+        self.is_processing = true;
+        self.processing_progress = 0.0;
+
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        self.progress_rx = Some(progress_rx);
+        self.result_rx = Some(result_rx);
+
         let spec = self.spec.unwrap();
         let channels = spec.channels as usize;
         let sample_rate = spec.sample_rate as usize;
-        let total_samples = self.processed_waveform.samples_raw.len();
+        let samples = self.raw_waveform.samples_raw.clone();
+        let total_samples = samples.len();
+        let threshold = self.silence_threshold;
+        let min_len = self.min_silence_len;
 
-        let mut result_samples = Vec::new();
-        let mut silence_count = 0;
+        thread::spawn(move || {
+            let mut silence_segments = Vec::new();
+            let mut silence_count = 0;
+            let mut silence_start = 0;
 
-        for i in (0..total_samples).step_by(channels) {
-            let mut frame_amplitude = 0.0;
-            for ch in 0..channels {
-                let sample = self.processed_waveform.samples_raw[i + ch] as f32;
-                frame_amplitude += sample.abs() / i16::MAX as f32;
-            }
-            frame_amplitude /= channels as f32;
-
-            if frame_amplitude < silence_threshold {
-                silence_count += 1;
-            } else {
-                if silence_count < min_silence_len / (sample_rate / 1000) {
-                    for _ in 0..silence_count {
-                        for _ in 0..channels {
-                            result_samples.push(0);
-                        }
+            for i in (0..total_samples).step_by(channels) {
+                let mut frame_amplitude = 0.0;
+                for ch in 0..channels {
+                    if i + ch < total_samples {
+                        let sample = samples[i + ch] as f32;
+                        frame_amplitude += sample.abs() / i16::MAX as f32;
                     }
                 }
-                silence_count = 0;
-                for ch in 0..channels {
-                    result_samples.push(self.processed_waveform.samples_raw[i + ch]);
+                frame_amplitude /= channels as f32;
+
+                if frame_amplitude < threshold {
+                    if silence_count == 0 {
+                        silence_start = i;
+                    }
+                    silence_count += 1;
+                } else if silence_count > 0 {
+                    let min_samples = min_len * sample_rate / 1000;
+                    if silence_count >= min_samples {
+                        silence_segments.push((silence_start, i));
+                    }
+                    silence_count = 0;
+                }
+
+                let progress = i as f32 / total_samples as f32;
+                if (progress * 100.0) as usize % 1 == 0 { // Update every 1%
+                    let _ = progress_tx.send(progress); // Ignore send failure
                 }
             }
-        }
 
-        self.processed_waveform.samples_raw = result_samples;
-        self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-        self.processed_ready = true;
+            if silence_count >= min_len * sample_rate / 1000 {
+                silence_segments.push((silence_start, total_samples));
+            }
+
+            let _ = result_tx.send((silence_segments, None)); // Ignore send failure
+        });
+    }
+
+    pub fn remove_all_silence_background(&mut self) {
+        if self.is_processing || !self.file_loaded || self.spec.is_none() {
+            return;
+        }
+        self.is_processing = true;
+        self.processing_progress = 0.0;
+
+        let (progress_tx, progress_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        self.progress_rx = Some(progress_rx);
+        self.result_rx = Some(result_rx);
+
+        let spec = self.spec.unwrap();
+        let channels = spec.channels as usize;
+        let sample_rate = spec.sample_rate as usize;
+        let samples = self.raw_waveform.samples_raw.clone();
+        let total_samples = samples.len();
+        let threshold = self.silence_threshold;
+        let min_len = self.min_silence_len;
+
+        thread::spawn(move || {
+            let mut silence_segments = Vec::new();
+            let mut silence_count = 0;
+            let mut silence_start = 0;
+            let mut result_samples = Vec::new();
+            let mut last_end = 0;
+
+            for i in (0..total_samples).step_by(channels) {
+                let mut frame_amplitude = 0.0;
+                for ch in 0..channels {
+                    if i + ch < total_samples {
+                        let sample = samples[i + ch] as f32;
+                        frame_amplitude += sample.abs() / i16::MAX as f32;
+                    }
+                }
+                frame_amplitude /= channels as f32;
+
+                if frame_amplitude < threshold {
+                    if silence_count == 0 {
+                        silence_start = i;
+                    }
+                    silence_count += 1;
+                } else if silence_count > 0 {
+                    let min_samples = min_len * sample_rate / 1000;
+                    if silence_count >= min_samples {
+                        silence_segments.push((silence_start, i));
+                        for j in (last_end..silence_start).step_by(channels) {
+                            for ch in 0..channels {
+                                if j + ch < total_samples {
+                                    result_samples.push(samples[j + ch]);
+                                }
+                            }
+                        }
+                        last_end = i;
+                    }
+                    silence_count = 0;
+                }
+
+                let progress = i as f32 / total_samples as f32;
+                if (progress * 100.0) as usize % 1 == 0 {
+                    let _ = progress_tx.send(progress);
+                }
+            }
+
+            if silence_count >= min_len * sample_rate / 1000 {
+                silence_segments.push((silence_start, total_samples));
+            }
+
+            for i in (last_end..total_samples).step_by(channels) {
+                for ch in 0..channels {
+                    if i + ch < total_samples {
+                        result_samples.push(samples[i + ch]);
+                    }
+                }
+            }
+
+            let _ = result_tx.send((silence_segments, Some(result_samples)));
+        });
+    }
+
+    pub fn update_processing(&mut self) {
+        if let Some(ref rx) = self.progress_rx {
+            while let Ok(progress) = rx.try_recv() {
+                self.processing_progress = progress;
+            }
+        }
+        if let Some(ref rx) = self.result_rx {
+            if let Ok((silence_segments, result_samples)) = rx.try_recv() {
+                self.raw_waveform.silence_segments = silence_segments;
+                if let Some(samples) = result_samples {
+                    self.processed_waveform.samples_raw = samples;
+                    self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    self.processed_ready = true;
+                }
+                self.is_processing = false;
+                self.progress_rx = None;
+                self.result_rx = None;
+            }
+        }
     }
 
     pub fn save_file(&self) {

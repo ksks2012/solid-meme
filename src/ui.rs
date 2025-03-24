@@ -1,6 +1,5 @@
 use crate::app::SoundApp;
-use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId};
-use crate::ui::egui::Response;
+use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId, Response};
 
 pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -11,18 +10,53 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Load Audio").clicked() {
                     app.load_file();
                 }
-                if ui.button("Remove Silence").clicked() {
-                    app.remove_silence(0.01, 1000);
+                let detect_button = ui.add_enabled(!app.is_processing, egui::Button::new("Detect Silence"));
+                if detect_button.clicked() {
+                    app.detect_silence_background();
+                }
+                let remove_button = ui.add_enabled(!app.is_processing, egui::Button::new("Remove All Silence"));
+                if remove_button.clicked() {
+                    app.remove_all_silence_background();
                 }
                 if app.processed_ready && ui.button("Export").clicked() {
                     app.save_file();
                 }
             });
 
+            ui.horizontal(|ui| {
+                ui.label("Silence Threshold:");
+                ui.add(egui::Slider::new(&mut app.silence_threshold, 0.0..=0.1).text("Amplitude"));
+                ui.label("Min Silence Length (ms):");
+                ui.add(egui::Slider::new(&mut app.min_silence_len, 100..=2000).text("ms"));
+            });
+
+            // Show processing progress
+            if app.is_processing {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.label("Processing...");
+                    ui.add(egui::ProgressBar::new(app.processing_progress).show_percentage());
+                });
+            }
+
             ui.add_space(10.0);
 
             if app.file_loaded {
-                // Original waveform control buttons
+                let spec = app.spec.unwrap();
+                let sample_rate = spec.sample_rate as f32;
+                let current_raw_idx = *app.raw_waveform.current_idx.lock().unwrap() as f32;
+                let current_proc_idx = *app.processed_waveform.current_idx.lock().unwrap() as f32;
+                let current_raw_time = current_raw_idx / sample_rate;
+                let current_proc_time = current_proc_idx / sample_rate;
+
+                ui.label(format!(
+                    "Detected {} silence segments, total {:.1}s",
+                    app.raw_waveform.silence_segments.len(),
+                    app.raw_waveform.silence_segments.iter().map(|&(s, e)| (e - s) as f32 / sample_rate).sum::<f32>()
+                ));
+
+                ui.add_space(30.0);
+
                 ui.horizontal(|ui| {
                     ui.label("Original:");
                     if ui.button("Play").clicked() {
@@ -41,24 +75,14 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
 
                 ui.add_space(30.0);
 
-                let spec = app.spec.unwrap();
-                let sample_rate = spec.sample_rate as f32;
-                let current_raw_idx = *app.raw_waveform.current_idx.lock().unwrap() as f32;
-                let current_proc_idx = *app.processed_waveform.current_idx.lock().unwrap() as f32;
-                let current_raw_time = current_raw_idx / sample_rate;
-                let current_proc_time = current_proc_idx / sample_rate;
-
-                // Original waveform
                 ui.label("Original Waveform:");
                 let raw_response = ui.allocate_rect(
                     Rect::from_min_size(ui.cursor().min, egui::Vec2::new(ui.available_width(), 200.0)),
                     Sense::click_and_drag(),
                 );
 
-                let mut responses = vec![(raw_response.clone(), true)]; // (response, is_original)
+                let mut responses = vec![(raw_response.clone(), true)];
 
-                // Processed waveform (only shown when processed_ready)
-                let mut proc_response = None;
                 if app.processed_ready {
                     ui.add_space(100.0);
 
@@ -81,18 +105,16 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     ui.add_space(30.0);
 
                     ui.label("Processed Waveform:");
-                    let response = ui.allocate_rect(
+                    let proc_response = ui.allocate_rect(
                         Rect::from_min_size(ui.cursor().min, egui::Vec2::new(ui.available_width(), 200.0)),
                         Sense::click_and_drag(),
                     );
-                    proc_response = Some(response.clone());
-                    responses.push((response, false));
+                    responses.push((proc_response, false));
                 }
 
                 let painter = ui.painter();
                 let width = ui.available_width();
 
-                // Draw all waveforms
                 draw_waveform(
                     &painter,
                     raw_response.rect,
@@ -103,22 +125,25 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                     sample_rate,
                     app.zoom,
                     app.offset,
+                    &app.raw_waveform.silence_segments,
                 );
-                if let Some(proc_response) = proc_response {
-                    draw_waveform(
-                        &painter,
-                        proc_response.rect,
-                        &app.processed_waveform.samples,
-                        current_proc_idx,
-                        current_proc_time,
-                        app.processed_waveform.playing_stream.is_some(),
-                        sample_rate,
-                        app.zoom,
-                        app.offset,
-                    );
+                if app.processed_ready {
+                    if let Some(proc_response) = responses.last().map(|(r, _)| r) {
+                        draw_waveform(
+                            &painter,
+                            proc_response.rect,
+                            &app.processed_waveform.samples,
+                            current_proc_idx,
+                            current_proc_time,
+                            app.processed_waveform.playing_stream.is_some(),
+                            sample_rate,
+                            app.zoom,
+                            app.offset,
+                            &[], // Processed waveform does not display silence markers, as they have been removed
+                        );
+                    }
                 }
 
-                // Handle interactions
                 ui.input(|i| {
                     handle_waveform_interaction(app, i, &responses, width);
                 });
@@ -131,7 +156,6 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
     });
 }
 
-// Extracted interaction handling function
 fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, responses: &[(Response, bool)], width: f32) {
     for &(ref response, is_original) in responses {
         let rect = response.rect;
@@ -156,7 +180,6 @@ fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, res
             app.offset = app.offset.max(0.0).min(total_samples / samples_per_pixel - width);
         }
 
-        // Click to jump
         if input.pointer.primary_clicked() && rect.contains(input.pointer.hover_pos().unwrap_or_default()) {
             if let Some(pos) = input.pointer.hover_pos() {
                 let total_samples = if is_original {
@@ -182,6 +205,7 @@ fn draw_waveform(
     sample_rate: f32,
     zoom: f32,
     offset: f32,
+    silence_segments: &[(usize, usize)],
 ) {
     let pos = rect.min;
     let height = rect.height();
@@ -194,6 +218,20 @@ fn draw_waveform(
     let samples_per_pixel = total_samples / width / zoom;
     let start_sample = (offset * samples_per_pixel).max(0.0).min(total_samples - 1.0) as usize;
 
+    // Draw silence segments
+    for &(start, end) in silence_segments {
+        let start_x = pos.x + ((start as f32 - offset * samples_per_pixel) / samples_per_pixel).max(0.0);
+        let end_x = pos.x + ((end as f32 - offset * samples_per_pixel) / samples_per_pixel).min(width);
+        if start_x < end_x && start_x < pos.x + width && end_x > pos.x {
+            painter.rect_filled(
+                Rect::from_min_max(Pos2::new(start_x, pos.y), Pos2::new(end_x, pos.y + height)),
+                0.0,
+                Color32::from_gray(200)
+            );
+        }
+    }
+
+    // Draw waveform
     let mut points = Vec::new();
     for x in 0..width as usize {
         let sample_idx = (start_sample as f32 + x as f32 * samples_per_pixel) as usize;
@@ -239,6 +277,7 @@ fn draw_waveform(
 
 impl eframe::App for SoundApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_processing();
         draw_ui(self, ctx);
     }
 }

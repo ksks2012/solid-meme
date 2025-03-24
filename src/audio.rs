@@ -5,10 +5,11 @@ use std::thread;
 
 #[derive(Clone)]
 pub struct WaveformData {
-    pub samples: Vec<f32>,        // Waveform data for display
-    pub samples_raw: Vec<i16>,    // Raw data for playback
-    pub current_idx: Arc<Mutex<usize>>, // Playback progress
+    pub samples: Vec<f32>,
+    pub samples_raw: Vec<i16>,
+    pub current_idx: Arc<Mutex<usize>>,
     pub playing_stream: Option<Arc<cpal::Stream>>,
+    pub silence_segments: Vec<(usize, usize)>, // Added: silence segments (start, end)
 }
 
 impl WaveformData {
@@ -18,6 +19,7 @@ impl WaveformData {
             samples_raw: Vec::new(),
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
+            silence_segments: Vec::new(),
         }
     }
 
@@ -27,6 +29,7 @@ impl WaveformData {
             samples_raw,
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
+            silence_segments: Vec::new(),
         }
     }
 }

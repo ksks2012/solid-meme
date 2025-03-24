@@ -16,6 +16,7 @@ This tool allows you to load, process, and play WAV audio files. It provides fun
 - **Resume**: Resume the playback of the paused audio file.
 - **Jump Position**: Jump to a specific position in the audio file during playback.
 - **Stop**: Stop the playback of the audio file.
+- **Silence Segments**: Identify and highlight segments of silence within the Waveform Visualization.
 
 ## Usage
 
