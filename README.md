@@ -12,6 +12,10 @@ This tool allows you to load, process, and play WAV audio files. It provides fun
 - **Stop**: Stop the playback of the audio file.
 - **Waveform Visualization**: Visualize the waveform of both the original and processed audio files.
 - **Zoom and Pan**: Zoom in and out of the waveform and pan to different parts of the audio.
+- **Pause**: Pause the playback of the audio file.
+- **Resume**: Resume the playback of the paused audio file.
+- **Jump Position**: Jump to a specific position in the audio file during playback.
+- **Stop**: Stop the playback of the audio file.
 
 ## Usage
 
@@ -22,6 +26,10 @@ This tool allows you to load, process, and play WAV audio files. It provides fun
 5. **Play Processed**: Click the "Play Processed" button to play the processed audio.
 6. **Stop**: Click the "Stop" button to stop the playback.
 7. **Zoom and Pan**: Use the mouse scroll wheel to zoom in and out of the waveform. Click and drag to pan across the waveform.
+8. **Pause**: Click the "Pause" button to pause the playback.
+9. **Resume**: Click the "Resume" button to resume the playback from the paused position.
+10. **Jump Position**: Use the slider to jump to a specific position in the audio file during playback.
+11. **Stop**: Click the "Stop" button to stop the playback.
 
 # Installation
 
@@ -45,3 +53,7 @@ src/
 ├── ui.rs           # UI rendering and interaction logic
 └── lib.rs          # Optional, defines public modules (if needed as a library)
 ```
+
+# Update
+
+- Independent operation of two Waveform Visualizations
