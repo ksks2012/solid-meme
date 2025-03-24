@@ -1,6 +1,5 @@
 use crate::app::SoundApp;
-use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId};
-use crate::ui::egui::Response;
+use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId, Response};
 
 pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -11,25 +10,34 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 if ui.button("Load Audio").clicked() {
                     app.load_file();
                 }
-                if ui.button("Detect Silence").clicked() {
-                    let silence_segments = app.detect_silence();
-                    app.raw_waveform.silence_segments = silence_segments;
+                let detect_button = ui.add_enabled(!app.is_processing, egui::Button::new("Detect Silence"));
+                if detect_button.clicked() {
+                    app.detect_silence_background();
                 }
-                if ui.button("Remove All Silence").clicked() {
-                    app.remove_all_silence();
+                let remove_button = ui.add_enabled(!app.is_processing, egui::Button::new("Remove All Silence"));
+                if remove_button.clicked() {
+                    app.remove_all_silence_background();
                 }
                 if app.processed_ready && ui.button("Export").clicked() {
                     app.save_file();
                 }
             });
 
-            // Silence parameters adjustment
             ui.horizontal(|ui| {
                 ui.label("Silence Threshold:");
                 ui.add(egui::Slider::new(&mut app.silence_threshold, 0.0..=0.1).text("Amplitude"));
                 ui.label("Min Silence Length (ms):");
                 ui.add(egui::Slider::new(&mut app.min_silence_len, 100..=2000).text("ms"));
             });
+
+            // Show processing progress
+            if app.is_processing {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.label("Processing...");
+                    ui.add(egui::ProgressBar::new(app.processing_progress).show_percentage());
+                });
+            }
 
             ui.add_space(10.0);
 
@@ -40,15 +48,15 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 let current_proc_idx = *app.processed_waveform.current_idx.lock().unwrap() as f32;
                 let current_raw_time = current_raw_idx / sample_rate;
                 let current_proc_time = current_proc_idx / sample_rate;
-    
+
                 ui.label(format!(
                     "Detected {} silence segments, total {:.1}s",
                     app.raw_waveform.silence_segments.len(),
                     app.raw_waveform.silence_segments.iter().map(|&(s, e)| (e - s) as f32 / sample_rate).sum::<f32>()
                 ));
-    
+
                 ui.add_space(30.0);
-    
+
                 ui.horizontal(|ui| {
                     ui.label("Original:");
                     if ui.button("Play").clicked() {
@@ -75,7 +83,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
 
                 let mut responses = vec![(raw_response.clone(), true)];
 
-                if app.processed_ready {                    
+                if app.processed_ready {
                     ui.add_space(100.0);
 
                     ui.horizontal(|ui| {
@@ -269,6 +277,7 @@ fn draw_waveform(
 
 impl eframe::App for SoundApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.update_processing();
         draw_ui(self, ctx);
     }
 }
