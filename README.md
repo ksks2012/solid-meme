@@ -58,3 +58,13 @@ src/
 # Update
 
 - Independent operation of two Waveform Visualizations
+
+# Improve Memory Usage
+
+## Processing a 300 MB WAV File
+
+| Optimization Step                         | Memory Usage After Removing Silence |
+|-------------------------------------------|------------------------------------:|
+| Initial                                   | 2 GB                                |
+| Avoid unnecessary `f32` conversions       | 1.2 GB                              |
+| Reduce copying in background threads      | 700 MB                              |
