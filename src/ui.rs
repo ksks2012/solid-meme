@@ -1,5 +1,6 @@
 use crate::app::SoundApp;
 use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId, Response};
+use std::sync::Arc;
 
 pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -30,7 +31,6 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.add(egui::Slider::new(&mut app.min_silence_len, 100..=2000).text("ms"));
             });
 
-            // Show processing progress
             if app.is_processing {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -198,7 +198,7 @@ fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, res
 fn draw_waveform(
     painter: &Painter,
     rect: Rect,
-    samples_raw: &[i16],
+    samples_raw: &Arc<Vec<i16>>,
     current_idx: f32,
     current_time: f32,
     show_progress: bool,

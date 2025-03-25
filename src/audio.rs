@@ -5,7 +5,7 @@ use std::thread;
 
 #[derive(Clone)]
 pub struct WaveformData {
-    pub samples_raw: Vec<i16>, // Only keep i16 data
+    pub samples_raw: Arc<Vec<i16>>, // Only keep i16 data
     pub current_idx: Arc<Mutex<usize>>,
     pub playing_stream: Option<Arc<cpal::Stream>>,
     pub silence_segments: Vec<(usize, usize)>,
@@ -14,7 +14,7 @@ pub struct WaveformData {
 impl WaveformData {
     pub fn new() -> Self {
         Self {
-            samples_raw: Vec::new(),
+            samples_raw: Arc::new(Vec::new()),
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
             silence_segments: Vec::new(),
@@ -23,7 +23,7 @@ impl WaveformData {
 
     pub fn from_samples(samples_raw: Vec<i16>) -> Self {
         Self {
-            samples_raw,
+            samples_raw: Arc::new(samples_raw),
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
             silence_segments: Vec::new(),
