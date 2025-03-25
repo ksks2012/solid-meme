@@ -1,5 +1,6 @@
 use crate::app::SoundApp;
 use eframe::egui::{self, Painter, Rect, Sense, Stroke, Color32, Pos2, Align2, FontId, Response};
+use std::sync::Arc;
 
 pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -30,7 +31,6 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 ui.add(egui::Slider::new(&mut app.min_silence_len, 100..=2000).text("ms"));
             });
 
-            // Show processing progress
             if app.is_processing {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -118,7 +118,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                 draw_waveform(
                     &painter,
                     raw_response.rect,
-                    &app.raw_waveform.samples,
+                    &app.raw_waveform.samples_raw,
                     current_raw_idx,
                     current_raw_time,
                     app.raw_waveform.playing_stream.is_some(),
@@ -132,7 +132,7 @@ pub fn draw_ui(app: &mut SoundApp, ctx: &egui::Context) {
                         draw_waveform(
                             &painter,
                             proc_response.rect,
-                            &app.processed_waveform.samples,
+                            &app.processed_waveform.samples_raw,
                             current_proc_idx,
                             current_proc_time,
                             app.processed_waveform.playing_stream.is_some(),
@@ -171,9 +171,9 @@ fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, res
         if input.pointer.primary_down() && rect.contains(input.pointer.hover_pos().unwrap_or_default()) {
             let delta = input.pointer.delta();
             let total_samples = if is_original {
-                app.raw_waveform.samples.len()
+                app.raw_waveform.samples_raw.len()
             } else {
-                app.processed_waveform.samples.len()
+                app.processed_waveform.samples_raw.len()
             } as f32;
             let samples_per_pixel = total_samples / width / app.zoom;
             app.offset -= delta.x;
@@ -183,9 +183,9 @@ fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, res
         if input.pointer.primary_clicked() && rect.contains(input.pointer.hover_pos().unwrap_or_default()) {
             if let Some(pos) = input.pointer.hover_pos() {
                 let total_samples = if is_original {
-                    app.raw_waveform.samples.len()
+                    app.raw_waveform.samples_raw.len()
                 } else {
-                    app.processed_waveform.samples.len()
+                    app.processed_waveform.samples_raw.len()
                 } as f32;
                 let samples_per_pixel = total_samples / width / app.zoom;
                 let sample_idx = ((pos.x - rect.min.x + app.offset) * samples_per_pixel) as usize;
@@ -198,7 +198,7 @@ fn handle_waveform_interaction(app: &mut SoundApp, input: &egui::InputState, res
 fn draw_waveform(
     painter: &Painter,
     rect: Rect,
-    samples: &[f32],
+    samples_raw: &Arc<Vec<i16>>,
     current_idx: f32,
     current_time: f32,
     show_progress: bool,
@@ -213,12 +213,11 @@ fn draw_waveform(
 
     painter.rect_filled(rect, 0.0, Color32::WHITE);
 
-    let total_samples = samples.len() as f32;
+    let total_samples = samples_raw.len() as f32;
     let total_seconds = total_samples / sample_rate;
     let samples_per_pixel = total_samples / width / zoom;
     let start_sample = (offset * samples_per_pixel).max(0.0).min(total_samples - 1.0) as usize;
 
-    // Draw silence segments
     for &(start, end) in silence_segments {
         let start_x = pos.x + ((start as f32 - offset * samples_per_pixel) / samples_per_pixel).max(0.0);
         let end_x = pos.x + ((end as f32 - offset * samples_per_pixel) / samples_per_pixel).min(width);
@@ -226,17 +225,16 @@ fn draw_waveform(
             painter.rect_filled(
                 Rect::from_min_max(Pos2::new(start_x, pos.y), Pos2::new(end_x, pos.y + height)),
                 0.0,
-                Color32::from_gray(200)
+                Color32::from_gray(200),
             );
         }
     }
 
-    // Draw waveform
     let mut points = Vec::new();
     for x in 0..width as usize {
         let sample_idx = (start_sample as f32 + x as f32 * samples_per_pixel) as usize;
-        if sample_idx < samples.len() {
-            let y = samples[sample_idx];
+        if sample_idx < samples_raw.len() {
+            let y = samples_raw[sample_idx] as f32 / i16::MAX as f32;
             let y_pos = pos.y + height * (0.5 - y * 0.5);
             points.push(Pos2::new(pos.x + x as f32, y_pos));
         }

@@ -1,8 +1,8 @@
 use cpal::traits::StreamTrait;
-use crate::audio::{play_samples, WaveformData};
+use crate::audio::{play_samples, PlaybackSource, WaveformData};
 use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, mpsc::{self, Receiver}};
 use std::thread;
 
 pub struct SoundApp {
@@ -17,8 +17,9 @@ pub struct SoundApp {
     pub min_silence_len: usize,
     pub is_processing: bool,
     pub processing_progress: f32,
-    pub progress_rx: Option<Receiver<f32>>, // Persistent receiver for progress
-    pub result_rx: Option<Receiver<(Vec<(usize, usize)>, Option<Vec<i16>>)>>, // Persistent receiver for results
+    pub progress_rx: Option<Receiver<f32>>,
+    pub result_rx: Option<Receiver<(Vec<(usize, usize)>, Option<Vec<i16>>)>>,
+    pub stop_rx: Option<Receiver<PlaybackSource>>,
 }
 
 impl SoundApp {
@@ -37,6 +38,7 @@ impl SoundApp {
             processing_progress: 0.0,
             progress_rx: None,
             result_rx: None,
+            stop_rx: None,
         }
     }
 
@@ -46,9 +48,8 @@ impl SoundApp {
                 let spec = reader.spec();
                 let raw_samples: Vec<i16> = reader.samples().map(|s| s.unwrap()).collect();
                 println!("Loaded raw samples count: {}", raw_samples.len());
-                let samples_f32: Vec<f32> = raw_samples.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                self.raw_waveform = WaveformData::from_samples(raw_samples.clone(), samples_f32.clone());
-                self.processed_waveform = WaveformData::from_samples(raw_samples, samples_f32);
+                self.raw_waveform = WaveformData::from_samples(raw_samples.clone());
+                self.processed_waveform = WaveformData::from_samples(raw_samples);
                 self.spec = Some(spec);
                 self.file_loaded = true;
                 self.zoom = 1.0;
@@ -75,7 +76,7 @@ impl SoundApp {
         let spec = self.spec.unwrap();
         let channels = spec.channels as usize;
         let sample_rate = spec.sample_rate as usize;
-        let samples = self.raw_waveform.samples_raw.clone();
+        let samples = Arc::clone(&self.raw_waveform.samples_raw); // shared data
         let total_samples = samples.len();
         let threshold = self.silence_threshold;
         let min_len = self.min_silence_len;
@@ -109,8 +110,8 @@ impl SoundApp {
                 }
 
                 let progress = i as f32 / total_samples as f32;
-                if (progress * 100.0) as usize % 1 == 0 { // Update every 1%
-                    let _ = progress_tx.send(progress); // Ignore send failure
+                if (progress * 100.0) as usize % 1 == 0 {
+                    let _ = progress_tx.send(progress);
                 }
             }
 
@@ -118,7 +119,7 @@ impl SoundApp {
                 silence_segments.push((silence_start, total_samples));
             }
 
-            let _ = result_tx.send((silence_segments, None)); // Ignore send failure
+            let _ = result_tx.send((silence_segments, None));
         });
     }
 
@@ -137,7 +138,7 @@ impl SoundApp {
         let spec = self.spec.unwrap();
         let channels = spec.channels as usize;
         let sample_rate = spec.sample_rate as usize;
-        let samples = self.raw_waveform.samples_raw.clone();
+        let samples = Arc::clone(&self.raw_waveform.samples_raw);
         let total_samples = samples.len();
         let threshold = self.silence_threshold;
         let min_len = self.min_silence_len;
@@ -212,14 +213,29 @@ impl SoundApp {
             if let Ok((silence_segments, result_samples)) = rx.try_recv() {
                 self.raw_waveform.silence_segments = silence_segments;
                 if let Some(samples) = result_samples {
-                    self.processed_waveform.samples_raw = samples;
-                    self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    self.processed_waveform.samples_raw = Arc::new(samples);
                     self.processed_ready = true;
                 }
                 self.is_processing = false;
                 self.progress_rx = None;
                 self.result_rx = None;
             }
+        }
+        // Handle stop signal
+        if let Some(rx) = self.stop_rx.take() { // Take and consume stop_rx
+            while let Ok(source) = rx.try_recv() {
+                match source {
+                    PlaybackSource::Raw => {
+                        self.raw_waveform.playing_stream = None;
+                        println!("Raw waveform playback finished and cleaned up");
+                    }
+                    PlaybackSource::Processed => {
+                        self.processed_waveform.playing_stream = None;
+                        println!("Processed waveform playback finished and cleaned up");
+                    }
+                }
+            }
+            self.stop_rx = None;
         }
     }
 
@@ -231,7 +247,7 @@ impl SoundApp {
                 .save_file()
             {
                 if let Ok(mut writer) = WavWriter::create(&path, spec) {
-                    for &sample in &self.processed_waveform.samples_raw {
+                    for &sample in self.processed_waveform.samples_raw.iter() {
                         writer.write_sample(sample).unwrap();
                     }
                     writer.finalize().unwrap();
@@ -246,10 +262,19 @@ impl SoundApp {
             if let Some(stream) = &self.processed_waveform.playing_stream {
                 stream.pause().expect("Failed to pause processed stream");
             }
-            let samples = self.raw_waveform.samples_raw.clone();
+            let samples = Arc::clone(&self.raw_waveform.samples_raw);
             let spec = self.spec.unwrap();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            self.stop_rx = Some(stop_rx);
             println!("Playing original samples count: {}", samples.len());
-            play_samples(&mut self.raw_waveform.playing_stream, samples, spec, &self.raw_waveform.current_idx);
+            play_samples(
+                &mut self.raw_waveform.playing_stream,
+                samples,
+                spec,
+                &self.raw_waveform.current_idx,
+                Some(stop_tx),
+                PlaybackSource::Raw,
+            );
         }
     }
 
@@ -258,10 +283,19 @@ impl SoundApp {
             if let Some(stream) = &self.raw_waveform.playing_stream {
                 stream.pause().expect("Failed to pause original stream");
             }
-            let samples = self.processed_waveform.samples_raw.clone();
+            let samples = Arc::clone(&self.processed_waveform.samples_raw);
             let spec = self.spec.unwrap();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            self.stop_rx = Some(stop_rx);
             println!("Playing processed samples count: {}", samples.len());
-            play_samples(&mut self.processed_waveform.playing_stream, samples, spec, &self.processed_waveform.current_idx);
+            play_samples(
+                &mut self.processed_waveform.playing_stream,
+                samples,
+                spec,
+                &self.processed_waveform.current_idx,
+                Some(stop_tx),
+                PlaybackSource::Processed,
+            );
         }
     }
 

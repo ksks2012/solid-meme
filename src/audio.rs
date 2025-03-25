@@ -1,32 +1,35 @@
 use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
 use hound::WavSpec;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex, mpsc::Sender};
+
+// Add enum type to represent playback source
+#[derive(Debug, Clone)]
+pub enum PlaybackSource {
+    Raw,
+    Processed,
+}
 
 #[derive(Clone)]
 pub struct WaveformData {
-    pub samples: Vec<f32>,
-    pub samples_raw: Vec<i16>,
+    pub samples_raw: Arc<Vec<i16>>,
     pub current_idx: Arc<Mutex<usize>>,
     pub playing_stream: Option<Arc<cpal::Stream>>,
-    pub silence_segments: Vec<(usize, usize)>, // Added: silence segments (start, end)
+    pub silence_segments: Vec<(usize, usize)>,
 }
 
 impl WaveformData {
     pub fn new() -> Self {
         Self {
-            samples: Vec::new(),
-            samples_raw: Vec::new(),
+            samples_raw: Arc::new(Vec::new()),
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
             silence_segments: Vec::new(),
         }
     }
 
-    pub fn from_samples(samples_raw: Vec<i16>, samples: Vec<f32>) -> Self {
+    pub fn from_samples(samples_raw: Vec<i16>) -> Self {
         Self {
-            samples,
-            samples_raw,
+            samples_raw: Arc::new(samples_raw),
             current_idx: Arc::new(Mutex::new(0)),
             playing_stream: None,
             silence_segments: Vec::new(),
@@ -36,9 +39,11 @@ impl WaveformData {
 
 pub fn play_samples(
     stream: &mut Option<Arc<cpal::Stream>>,
-    samples: Vec<i16>,
+    samples: Arc<Vec<i16>>,
     spec: WavSpec,
     current_idx: &Arc<Mutex<usize>>,
+    stop_tx: Option<Sender<PlaybackSource>>,
+    source: PlaybackSource,
 ) {
     let sample_len = samples.len();
     let host = cpal::default_host();
@@ -49,8 +54,9 @@ pub fn play_samples(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let samples = samples.clone();
+    let samples = Arc::clone(&samples);
     let current_idx = Arc::clone(current_idx);
+    let stop_tx_clone = stop_tx.clone();
     *current_idx.lock().unwrap() = 0;
 
     let audio_stream = device
@@ -58,6 +64,7 @@ pub fn play_samples(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let mut idx = current_idx.lock().unwrap();
+                let mut all_played = false;
                 for frame in data.chunks_mut(spec.channels as usize) {
                     for sample in frame {
                         if *idx < sample_len {
@@ -65,7 +72,14 @@ pub fn play_samples(
                             *idx += 1;
                         } else {
                             *sample = 0.0;
+                            all_played = true;
                         }
+                    }
+                }
+                // Check if all samples have been played
+                if all_played && *idx >= sample_len {
+                    if let Some(ref tx) = stop_tx_clone {
+                        let _ = tx.send(source.clone()); // Notify the main thread to stop
                     }
                 }
             },
@@ -77,11 +91,5 @@ pub fn play_samples(
     audio_stream.play().expect("Failed to play stream");
 
     let audio_stream = Arc::new(audio_stream);
-    *stream = Some(audio_stream.clone());
-
-    thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(
-            (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64),
-        ));
-    });
+    *stream = Some(Arc::clone(&audio_stream));
 }
