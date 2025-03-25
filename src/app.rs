@@ -46,9 +46,8 @@ impl SoundApp {
                 let spec = reader.spec();
                 let raw_samples: Vec<i16> = reader.samples().map(|s| s.unwrap()).collect();
                 println!("Loaded raw samples count: {}", raw_samples.len());
-                let samples_f32: Vec<f32> = raw_samples.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                self.raw_waveform = WaveformData::from_samples(raw_samples.clone(), samples_f32.clone());
-                self.processed_waveform = WaveformData::from_samples(raw_samples, samples_f32);
+                self.raw_waveform = WaveformData::from_samples(raw_samples.clone());
+                self.processed_waveform = WaveformData::from_samples(raw_samples);
                 self.spec = Some(spec);
                 self.file_loaded = true;
                 self.zoom = 1.0;
@@ -59,7 +58,7 @@ impl SoundApp {
             }
         }
     }
-
+    
     pub fn detect_silence_background(&mut self) {
         if self.is_processing || !self.file_loaded || self.spec.is_none() {
             return;
@@ -213,7 +212,6 @@ impl SoundApp {
                 self.raw_waveform.silence_segments = silence_segments;
                 if let Some(samples) = result_samples {
                     self.processed_waveform.samples_raw = samples;
-                    self.processed_waveform.samples = self.processed_waveform.samples_raw.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
                     self.processed_ready = true;
                 }
                 self.is_processing = false;
