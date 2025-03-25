@@ -1,9 +1,10 @@
 use cpal::traits::StreamTrait;
-use crate::audio::{play_samples, WaveformData};
+use crate::audio::{play_samples, PlaybackSource, WaveformData};
 use hound::{WavReader, WavWriter};
 use rfd::FileDialog;
 use std::sync::{Arc, mpsc::{self, Receiver}};
 use std::thread;
+
 pub struct SoundApp {
     pub raw_waveform: WaveformData,
     pub processed_waveform: WaveformData,
@@ -18,6 +19,7 @@ pub struct SoundApp {
     pub processing_progress: f32,
     pub progress_rx: Option<Receiver<f32>>,
     pub result_rx: Option<Receiver<(Vec<(usize, usize)>, Option<Vec<i16>>)>>,
+    pub stop_rx: Option<Receiver<PlaybackSource>>,
 }
 
 impl SoundApp {
@@ -36,6 +38,7 @@ impl SoundApp {
             processing_progress: 0.0,
             progress_rx: None,
             result_rx: None,
+            stop_rx: None,
         }
     }
 
@@ -210,13 +213,29 @@ impl SoundApp {
             if let Ok((silence_segments, result_samples)) = rx.try_recv() {
                 self.raw_waveform.silence_segments = silence_segments;
                 if let Some(samples) = result_samples {
-                    self.processed_waveform.samples_raw = Arc::new(samples); // Wrap the result in an Arc
+                    self.processed_waveform.samples_raw = Arc::new(samples);
                     self.processed_ready = true;
                 }
                 self.is_processing = false;
                 self.progress_rx = None;
                 self.result_rx = None;
             }
+        }
+        // Handle stop signal
+        if let Some(rx) = self.stop_rx.take() { // Take and consume stop_rx
+            while let Ok(source) = rx.try_recv() {
+                match source {
+                    PlaybackSource::Raw => {
+                        self.raw_waveform.playing_stream = None;
+                        println!("Raw waveform playback finished and cleaned up");
+                    }
+                    PlaybackSource::Processed => {
+                        self.processed_waveform.playing_stream = None;
+                        println!("Processed waveform playback finished and cleaned up");
+                    }
+                }
+            }
+            self.stop_rx = None;
         }
     }
 
@@ -245,11 +264,20 @@ impl SoundApp {
             }
             let samples = Arc::clone(&self.raw_waveform.samples_raw);
             let spec = self.spec.unwrap();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            self.stop_rx = Some(stop_rx);
             println!("Playing original samples count: {}", samples.len());
-            play_samples(&mut self.raw_waveform.playing_stream, samples, spec, &self.raw_waveform.current_idx);
+            play_samples(
+                &mut self.raw_waveform.playing_stream,
+                samples,
+                spec,
+                &self.raw_waveform.current_idx,
+                Some(stop_tx),
+                PlaybackSource::Raw,
+            );
         }
     }
-    
+
     pub fn play_processed(&mut self) {
         if self.file_loaded && self.spec.is_some() && self.processed_ready {
             if let Some(stream) = &self.raw_waveform.playing_stream {
@@ -257,8 +285,17 @@ impl SoundApp {
             }
             let samples = Arc::clone(&self.processed_waveform.samples_raw);
             let spec = self.spec.unwrap();
+            let (stop_tx, stop_rx) = mpsc::channel();
+            self.stop_rx = Some(stop_rx);
             println!("Playing processed samples count: {}", samples.len());
-            play_samples(&mut self.processed_waveform.playing_stream, samples, spec, &self.processed_waveform.current_idx);
+            play_samples(
+                &mut self.processed_waveform.playing_stream,
+                samples,
+                spec,
+                &self.processed_waveform.current_idx,
+                Some(stop_tx),
+                PlaybackSource::Processed,
+            );
         }
     }
 

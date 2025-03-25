@@ -1,11 +1,17 @@
 use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
 use hound::WavSpec;
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex, mpsc::Sender};
+
+// Add enum type to represent playback source
+#[derive(Debug, Clone)]
+pub enum PlaybackSource {
+    Raw,
+    Processed,
+}
 
 #[derive(Clone)]
 pub struct WaveformData {
-    pub samples_raw: Arc<Vec<i16>>, // Only keep i16 data
+    pub samples_raw: Arc<Vec<i16>>,
     pub current_idx: Arc<Mutex<usize>>,
     pub playing_stream: Option<Arc<cpal::Stream>>,
     pub silence_segments: Vec<(usize, usize)>,
@@ -36,6 +42,8 @@ pub fn play_samples(
     samples: Arc<Vec<i16>>,
     spec: WavSpec,
     current_idx: &Arc<Mutex<usize>>,
+    stop_tx: Option<Sender<PlaybackSource>>,
+    source: PlaybackSource,
 ) {
     let sample_len = samples.len();
     let host = cpal::default_host();
@@ -48,6 +56,7 @@ pub fn play_samples(
 
     let samples = Arc::clone(&samples);
     let current_idx = Arc::clone(current_idx);
+    let stop_tx_clone = stop_tx.clone();
     *current_idx.lock().unwrap() = 0;
 
     let audio_stream = device
@@ -55,6 +64,7 @@ pub fn play_samples(
             &config,
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                 let mut idx = current_idx.lock().unwrap();
+                let mut all_played = false;
                 for frame in data.chunks_mut(spec.channels as usize) {
                     for sample in frame {
                         if *idx < sample_len {
@@ -62,7 +72,14 @@ pub fn play_samples(
                             *idx += 1;
                         } else {
                             *sample = 0.0;
+                            all_played = true;
                         }
+                    }
+                }
+                // Check if all samples have been played
+                if all_played && *idx >= sample_len {
+                    if let Some(ref tx) = stop_tx_clone {
+                        let _ = tx.send(source.clone()); // Notify the main thread to stop
                     }
                 }
             },
@@ -75,11 +92,4 @@ pub fn play_samples(
 
     let audio_stream = Arc::new(audio_stream);
     *stream = Some(Arc::clone(&audio_stream));
-
-    thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(
-            (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64),
-        ));
-        // TODO: Clear playing_stream
-    });
 }
