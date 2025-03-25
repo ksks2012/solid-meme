@@ -67,4 +67,6 @@ src/
 |-------------------------------------------|------------------------------------:|
 | Initial                                   | 2 GB                                |
 | Avoid unnecessary `f32` conversions       | 1.2 GB                              |
-| Reduce copying in background threads      | 700 MB                              |
+| Reduce copying in background threads      | 0.7 GB                              |
+| Play Original and Processed audio file    | 1.4 GB                              |
+| Reduce copying in background threads      | 0.7 GB                              |
