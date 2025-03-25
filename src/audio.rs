@@ -33,7 +33,7 @@ impl WaveformData {
 
 pub fn play_samples(
     stream: &mut Option<Arc<cpal::Stream>>,
-    samples: Vec<i16>,
+    samples: Arc<Vec<i16>>,
     spec: WavSpec,
     current_idx: &Arc<Mutex<usize>>,
 ) {
@@ -46,7 +46,7 @@ pub fn play_samples(
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let samples = samples.clone();
+    let samples = Arc::clone(&samples);
     let current_idx = Arc::clone(current_idx);
     *current_idx.lock().unwrap() = 0;
 
@@ -74,11 +74,12 @@ pub fn play_samples(
     audio_stream.play().expect("Failed to play stream");
 
     let audio_stream = Arc::new(audio_stream);
-    *stream = Some(audio_stream.clone());
+    *stream = Some(Arc::clone(&audio_stream));
 
     thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(
             (sample_len as u64 * 1000) / (spec.sample_rate as u64 * spec.channels as u64),
         ));
+        // TODO: Clear playing_stream
     });
 }

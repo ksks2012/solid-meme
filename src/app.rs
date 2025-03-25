@@ -243,19 +243,19 @@ impl SoundApp {
             if let Some(stream) = &self.processed_waveform.playing_stream {
                 stream.pause().expect("Failed to pause processed stream");
             }
-            let samples = (*self.raw_waveform.samples_raw).clone();
+            let samples = Arc::clone(&self.raw_waveform.samples_raw);
             let spec = self.spec.unwrap();
             println!("Playing original samples count: {}", samples.len());
             play_samples(&mut self.raw_waveform.playing_stream, samples, spec, &self.raw_waveform.current_idx);
         }
     }
-
+    
     pub fn play_processed(&mut self) {
         if self.file_loaded && self.spec.is_some() && self.processed_ready {
             if let Some(stream) = &self.raw_waveform.playing_stream {
                 stream.pause().expect("Failed to pause original stream");
             }
-            let samples = (*self.processed_waveform.samples_raw).clone();
+            let samples = Arc::clone(&self.processed_waveform.samples_raw);
             let spec = self.spec.unwrap();
             println!("Playing processed samples count: {}", samples.len());
             play_samples(&mut self.processed_waveform.playing_stream, samples, spec, &self.processed_waveform.current_idx);
